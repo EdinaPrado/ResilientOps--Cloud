@@ -1,0 +1,19 @@
+---
+# Diz ao Prometheus para coletar /metrics dos pods por trás do Service do app.
+# Requer o kube-prometheus-stack instalado (CRD monitoring.coreos.com).
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: resilientops-app
+  namespace: default
+  labels:
+    app: resilientops-app
+spec:
+  selector:
+    matchLabels:
+      app: resilientops-app
+  endpoints:
+    # "http" é o nome da porta definido no Service (deployment.yaml)
+    - port: http
+      path: /metrics
+      interval: 15s

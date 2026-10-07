@@ -1,0 +1,6 @@
+.git
+terraform
+k8s
+kind
+*.tfstate*
+*cluster-config*

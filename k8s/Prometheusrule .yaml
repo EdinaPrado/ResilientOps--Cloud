@@ -1,0 +1,67 @@
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: resilientops-rules
+  namespace: default
+  labels:
+    app: resilientops-app
+spec:
+  groups:
+    # SLIs pré-calculados (recording rules): deixam o dashboard e os alertas mais simples e baratos
+    - name: resilientops.sli
+      rules:
+        - record: resilientops:http_requests:rate5m
+          expr: sum(rate(http_requests_total{job="resilientops-service"}[5m]))
+
+        - record: resilientops:http_errors:ratio_rate5m
+          expr: |
+            (sum(rate(http_requests_total{job="resilientops-service",status="5xx"}[5m])) or vector(0))
+            /
+            sum(rate(http_requests_total{job="resilientops-service"}[5m]))
+
+        - record: resilientops:http_request_duration_seconds:p95_5m
+          expr: |
+            histogram_quantile(0.95,
+              sum by (le) (rate(http_request_duration_highr_seconds_bucket{job="resilientops-service"}[5m])))
+
+    - name: resilientops.alerts
+      rules:
+        - alert: ResilientOpsAppDown
+          expr: absent(up{job="resilientops-service"} == 1)
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "ResilientOps API fora do ar"
+            description: "Nenhum pod do resilientops-service está respondendo ao scrape de métricas há mais de 1 minuto."
+
+        - alert: ResilientOpsHighErrorRate
+          expr: resilientops:http_errors:ratio_rate5m > 0.05
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Taxa de erros 5xx acima de 5%"
+            description: "{{ $value | humanizePercentage }} das requisições estão falhando (janela de 5 minutos)."
+
+        - alert: ResilientOpsHighLatencyP95
+          expr: resilientops:http_request_duration_seconds:p95_5m > 0.5
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Latência p95 acima de 500 ms"
+            description: "A latência p95 está em {{ $value | humanizeDuration }} (janela de 5 minutos)."
+
+        - alert: ResilientOpsHPAAtMaxReplicas
+          expr: |
+            kube_horizontalpodautoscaler_status_current_replicas{horizontalpodautoscaler="resilientops-hpa"}
+            ==
+            kube_horizontalpodautoscaler_spec_max_replicas{horizontalpodautoscaler="resilientops-hpa"}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "HPA no limite máximo de réplicas"
+            description: "O resilientops-hpa está no máximo de réplicas há 10 minutos: a carga pode exigir mais capacidade."

@@ -1,0 +1,148 @@
+---
+# ResilientOps Cloud - Deployment, Service e PodDisruptionBudget
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: resilientops-app
+  namespace: default
+  labels:
+    app: resilientops-app
+    app.kubernetes.io/name: resilientops-app
+    app.kubernetes.io/part-of: resilientops-cloud
+    app.kubernetes.io/version: "v1"
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  # Deploy sem downtime: sobe 1 pod novo antes de derrubar um antigo
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: resilientops-app
+  template:
+    metadata:
+      labels:
+        app: resilientops-app
+        app.kubernetes.io/name: resilientops-app
+        app.kubernetes.io/part-of: resilientops-cloud
+        app.kubernetes.io/version: "v1"
+    spec:
+      # Tempo para o pod terminar requisições em andamento antes de morrer
+      terminationGracePeriodSeconds: 30
+      # O app não fala com a API do Kubernetes: não precisa do token
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      # Espalha os pods entre nodes (ScheduleAnyway não trava em cluster de 1 node)
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: resilientops-app
+      containers:
+        - name: app
+          image: resilientops-app:v1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          env:
+            # Útil para identificar qual pod respondeu (logs e demos de balanceamento)
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
+          # Dá tempo para o app iniciar sem o liveness matar o container
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          # Pequena pausa para o Service tirar o pod do balanceamento antes do SIGTERM
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "5"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          # Com o filesystem somente leitura, o app só escreve em /tmp
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: resilientops-service
+  namespace: default
+  labels:
+    app: resilientops-app
+    app.kubernetes.io/name: resilientops-app
+    app.kubernetes.io/part-of: resilientops-cloud
+spec:
+  type: NodePort
+  selector:
+    app: resilientops-app
+  ports:
+    - name: http
+      protocol: TCP
+      port: 8000
+      targetPort: http
+      nodePort: 30000
+---
+# Garante pelo menos 1 pod no ar durante manutenção de nodes (drain)
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: resilientops-pdb
+  namespace: default
+  labels:
+    app: resilientops-app
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: resilientops-app

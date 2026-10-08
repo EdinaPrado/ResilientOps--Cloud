@@ -1,0 +1,154 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Uma execução por branch: um push novo cancela a anterior ainda em andamento
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: resilientops-app:ci
+
+jobs:
+  lint:
+    name: Lint (Python e YAML)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar ferramentas
+        run: pip install ruff yamllint
+
+      - name: Ruff (Python)
+        run: ruff check app/
+
+      - name: yamllint
+        run: yamllint -c .yamllint.yml k8s kind .github
+
+  manifests:
+    name: Validar manifests do Kubernetes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar kubeconform
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz
+          sudo mv kubeconform /usr/local/bin/
+
+      # O catálogo do Datree traz os schemas dos CRDs (ServiceMonitor e PrometheusRule)
+      - name: kubeconform
+        run: |
+          kubeconform -strict -summary -kubernetes-version 1.31.0 \
+            -schema-location default \
+            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+            k8s/
+
+  terraform:
+    name: Terraform (fmt e validate)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive
+
+      - name: terraform init (sem backend e sem credenciais)
+        run: terraform init -backend=false -input=false
+
+      - name: terraform validate
+        run: terraform validate
+
+  docker:
+    name: Imagem Docker
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: docker build -f docker/Dockerfile -t $IMAGE .
+
+      - name: Container roda como não-root (UID 10001)
+        run: |
+          uid=$(docker run --rm --entrypoint id $IMAGE -u)
+          echo "UID do container: $uid"
+          test "$uid" = "10001"
+
+      # Mesmas restrições do securityContext do deployment.yaml
+      - name: Subir o container com as restrições do Kubernetes
+        run: |
+          docker run -d --name app -p 8000:8000 \
+            --user 10001 --read-only --tmpfs /tmp \
+            --cap-drop ALL --security-opt no-new-privileges $IMAGE
+          for i in $(seq 1 30); do
+            curl -sf localhost:8000/healthz > /dev/null && break
+            sleep 1
+          done
+
+      - name: Testar os endpoints
+        run: |
+          curl -sf localhost:8000/healthz
+          curl -sf localhost:8000/
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8000/error)" = "500"
+          curl -sf localhost:8000/metrics | grep -q http_requests_total
+
+      - name: Logs do container (em caso de falha)
+        if: failure()
+        run: docker logs app
+
+  e2e:
+    name: Teste de fumaça no kind
+    needs: [lint, manifests, terraform, docker]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      # A tag precisa ser a mesma do deployment.yaml
+      - name: Build da imagem
+        run: docker build -f docker/Dockerfile -t resilientops-app:v1 .
+
+      # Usa o mesmo kind-config do projeto (expõe o NodePort 30000 no runner)
+      - name: Criar cluster kind
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: resilientops
+          config: kind/kind-config.yaml
+
+      - name: Carregar a imagem no cluster
+        run: kind load docker-image resilientops-app:v1 --name resilientops
+
+      - name: Deploy
+        run: kubectl apply -f k8s/deployment.yaml
+
+      - name: Aguardar o rollout
+        run: kubectl rollout status deployment/resilientops-app --timeout=180s
+
+      - name: Testar via NodePort
+        run: curl -sf --retry 10 --retry-delay 3 --retry-connrefused localhost:30000/healthz
+
+      - name: Diagnóstico (em caso de falha)
+        if: failure()
+        run: |
+          kubectl get pods -o wide
+          kubectl describe pods -l app=resilientops-app
+          kubectl logs -l app=resilientops-app --tail=50

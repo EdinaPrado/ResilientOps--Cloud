@@ -1,0 +1,15 @@
+# Abre PRs automáticos quando há versões novas das dependências
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: pip
+    directory: /app
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directory: /docker
+    schedule:
+      interval: weekly

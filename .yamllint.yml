@@ -1,0 +1,16 @@
+extends: default
+
+rules:
+  line-length: disable
+  document-start: disable
+  comments-indentation: disable
+  comments:
+    min-spaces-from-content: 1
+  # "on:" dos workflows do GitHub Actions seria acusado como valor booleano
+  truthy:
+    check-keys: false
+  indentation:
+    spaces: 2
+    indent-sequences: consistent
+  empty-lines:
+    max: 2

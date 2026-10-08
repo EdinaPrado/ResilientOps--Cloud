@@ -86,9 +86,9 @@ resource "helm_release" "kube_prometheus_stack" {
 output "observability_access" {
   description = "Como abrir as interfaces (rode cada comando em um terminal)"
   value = var.install_observability ? {
-    grafana      = "kubectl port-forward -n monitoring svc/kube-prometheus-stack-grafana 3000:80"
-    prometheus   = "kubectl port-forward -n monitoring svc/kube-prometheus-stack-prometheus 9090:9090"
-    alertmanager = "kubectl port-forward -n monitoring svc/kube-prometheus-stack-alertmanager 9093:9093"
+    grafana       = "kubectl port-forward -n monitoring svc/kube-prometheus-stack-grafana 3000:80"
+    prometheus    = "kubectl port-forward -n monitoring svc/kube-prometheus-stack-prometheus 9090:9090"
+    alertmanager  = "kubectl port-forward -n monitoring svc/kube-prometheus-stack-alertmanager 9093:9093"
     grafana_senha = "kubectl get secret -n monitoring kube-prometheus-stack-grafana -o jsonpath=\"{.data.admin-password}\" | base64 -d; echo"
   } : {}
 }

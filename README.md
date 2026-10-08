@@ -1,4 +1,7 @@
+[![CI](https://github.com/EdinaPrado/ResilientOps--Cloud/actions/workflows/ci.yml/badge.svg)](https://github.com/EdinaPrado/ResilientOps--Cloud/actions/workflows/ci.yml)
+
 # ResilientOps Cloud
+
 
 Projeto de portfólio de **SRE / DevOps**: uma API em Python empacotada em container, rodando em Kubernetes com autoscaling, infraestrutura provisionada com Terraform e observabilidade com Prometheus, Alertmanager e Grafana. Tudo roda localmente, em um cluster **kind**.
 

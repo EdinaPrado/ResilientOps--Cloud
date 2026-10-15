@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 # Sem .pyc (o filesystem do container é somente leitura no Kubernetes),
 # logs sem buffer e HOME em /tmp, o único diretório gravável.
